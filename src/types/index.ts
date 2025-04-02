@@ -5,13 +5,20 @@ export interface ComponentRenderContext {
   hookIndex: number;
 }
 
-export type MetadataType = 'event' | 'content';
-export type Events = 'onClick';
+export type MetadataType = 'event' | 'content' | 'attribute';
+export type EventNames = 'onClick';
+
+export interface AttributeMetadata {
+  index: number;
+  type: 'attribute';
+  attributeName: string;
+  value: unknown;
+}
 
 export interface EventMetadata {
   index: number;
   type: 'event';
-  attributeName: Events;
+  eventName: EventNames;
   value: (event: Event) => void;
 }
 
@@ -21,7 +28,10 @@ export interface ContentMetadata {
   value: unknown;
 }
 
-export type ComponentMetadata = EventMetadata | ContentMetadata;
+export type ComponentMetadata =
+  | EventMetadata
+  | ContentMetadata
+  | AttributeMetadata;
 
 export interface ProcessedTemplate {
   staticHtml: string;
