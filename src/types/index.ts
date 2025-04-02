@@ -12,7 +12,7 @@ export interface AttributeMetadata {
   index: number;
   type: 'attribute';
   attributeName: string;
-  value: unknown;
+  value: string;
 }
 
 export interface EventMetadata {
@@ -25,7 +25,7 @@ export interface EventMetadata {
 export interface ContentMetadata {
   index: number;
   type: 'content';
-  value: unknown;
+  value: ProcessedTemplate | string;
 }
 
 export type ComponentMetadata =
@@ -36,4 +36,20 @@ export type ComponentMetadata =
 export interface ProcessedTemplate {
   staticHtml: string;
   dynamicParts: ComponentMetadata[];
+}
+
+export interface MountedComponentInstance {
+  id: string;
+  rootNodes: Node[];
+  container: HTMLElement;
+  processedTemplate: ProcessedTemplate;
+  dynamicNodeMap: Map<number, Node | Element>;
+  eventListenerMap: Map<
+    number,
+    { element: Element; eventName: string; handler: EventListener }
+  >;
+  childInstanceMap: Map<
+    number,
+    MountedComponentInstance | MountedComponentInstance[]
+  >;
 }

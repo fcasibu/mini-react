@@ -1,8 +1,15 @@
-import type { ComponentRenderContext } from './types';
+import { Renderer } from './renderer';
+import type { ComponentRenderContext, MountedComponentInstance } from './types';
 import { assert } from './utils/assert';
 
-// TODO(fcasibu): StateManager, EffectManager, Renderer
+// TODO(fcasibu): StateManager, EffectManager
 export class FrameworkOrchestrator {
+  public readonly renderer = new Renderer();
+
+  private readonly componentRegistry = new Map<
+    string,
+    MountedComponentInstance
+  >();
   private static instance: FrameworkOrchestrator;
   private componentContextStack: ComponentRenderContext[] = [];
 
@@ -14,6 +21,16 @@ export class FrameworkOrchestrator {
     }
 
     return FrameworkOrchestrator.instance;
+  }
+
+  public addMountedInstance(mountedInstance: MountedComponentInstance) {
+    if (!mountedInstance) return;
+
+    this.componentRegistry.set(mountedInstance.id, mountedInstance);
+  }
+
+  public getMountedInstance(id: string) {
+    return this.componentRegistry.get(id);
   }
 
   public startComponentRender(instanceId: string) {

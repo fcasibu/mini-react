@@ -1,3 +1,4 @@
+import { ATTRIBUTE_REGEX, EVENT_REGEX } from './constants';
 import type {
   AttributeMetadata,
   ComponentMetadata,
@@ -6,13 +7,13 @@ import type {
   EventNames,
   ProcessedTemplate,
 } from './types';
-import assert from 'assert/strict';
+import { assert } from './utils/assert';
 
-const EVENT_REGEX = /(on[A-Z][a-zA-Z]*):/;
-const ATTRIBUTE_REGEX = /([a-zA-Z]+)="/;
+const createContentPlaceholder = (index: number): string =>
+  `<!--placeholder-${index}-->`;
 
-const createPlaceholderComment = (index: number): string =>
-  `<--placeholder-${index}-->`;
+const createExpressionPlaceholder = (index: number): string =>
+  `placeholder-${index}`;
 
 export class TemplateProcessor {
   public process(
@@ -20,7 +21,6 @@ export class TemplateProcessor {
     expressions: unknown[],
   ): ProcessedTemplate {
     assert(staticStrings.length > 0, 'Static strings array cannot be empty');
-    assert(expressions.length > 0, 'Expressions array cannot be empty');
     assert(
       staticStrings.length === expressions.length + 1,
       'Invalid template structure',
@@ -50,8 +50,12 @@ export class TemplateProcessor {
       assert(staticString, 'Invalid HTML segment');
 
       const dynamicPart = this.createDynamicPart(i, staticString, expression);
+      const placeholder =
+        dynamicPart.type === 'content'
+          ? createContentPlaceholder(i)
+          : createExpressionPlaceholder(i);
 
-      processedTemplate.staticHtml += `${staticString}${createPlaceholderComment(i)}`;
+      processedTemplate.staticHtml += `${staticString}${placeholder}`;
       processedTemplate.dynamicParts.push(dynamicPart);
     }
   }
@@ -59,7 +63,7 @@ export class TemplateProcessor {
   private createDynamicPart(
     index: number,
     staticString: string,
-    expression: unknown,
+    expression: any,
   ): ComponentMetadata {
     if (EVENT_REGEX.test(staticString)) {
       return this.createEventMetadata(index, staticString, expression);
@@ -105,13 +109,13 @@ export class TemplateProcessor {
       index,
       type: 'attribute',
       attributeName,
-      value: expression,
+      value: String(expression),
     };
   }
 
   private createContentMetadata(
     index: number,
-    expression: unknown,
+    expression: string | ProcessedTemplate,
   ): ContentMetadata {
     return {
       index,
