@@ -1,3 +1,5 @@
+import type { Renderer } from '../renderer';
+
 export type Component = (props?: Record<string, unknown>) => unknown;
 
 export interface ComponentRenderContext {
@@ -41,7 +43,8 @@ export interface ProcessedTemplate {
 export interface MountedComponentInstance {
   id: string;
   rootNodes: Node[];
-  container: HTMLElement;
+  container: HTMLElement | null;
+  renderer: Renderer;
   componentDefinition: ComponentDefinition | null;
   processedTemplate: ProcessedTemplate;
   dynamicNodeMap: Map<number, Node | Element>;

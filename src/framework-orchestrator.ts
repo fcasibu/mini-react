@@ -1,7 +1,6 @@
 import type { ComponentRenderContext, MountedComponentInstance } from './types';
 import { assert } from './utils/assert';
 
-// TODO(fcasibu): StateManager, EffectManager
 export class FrameworkOrchestrator {
   private readonly componentRegistry = new Map<
     string,
@@ -28,6 +27,10 @@ export class FrameworkOrchestrator {
 
   public getMountedInstance(id: string) {
     return this.componentRegistry.get(id);
+  }
+
+  public removeMountedInstance(id: string) {
+    return this.componentRegistry.delete(id);
   }
 
   public startComponentRender(instanceId: string) {

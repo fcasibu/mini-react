@@ -1,6 +1,5 @@
 {
-  "name": "mini-ui",
-  "module": "src/index.ts",
+  "name": "mini-react",
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite",

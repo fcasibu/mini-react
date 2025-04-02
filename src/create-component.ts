@@ -11,6 +11,5 @@ export function component<P>(
     return { componentFunction: componentFunc, props: props ?? ({} as P) };
   };
 
-  (api as any).originalFunction = componentFunc;
   return api;
 }

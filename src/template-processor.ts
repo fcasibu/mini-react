@@ -32,8 +32,7 @@ export class TemplateProcessor {
     };
 
     this.processExpressions(staticStrings, expressions, processedTemplate);
-    processedTemplate.staticHtml +=
-      staticStrings[expressions.length]?.trim() ?? '';
+    processedTemplate.staticHtml += staticStrings[expressions.length] ?? '';
 
     return processedTemplate;
   }
@@ -44,7 +43,7 @@ export class TemplateProcessor {
     processedTemplate: ProcessedTemplate,
   ): void {
     for (let i = 0; i < expressions.length; ++i) {
-      const staticString = staticStrings[i]?.trim();
+      const staticString = staticStrings[i];
       const expression = expressions[i];
 
       assert(staticString, 'Invalid HTML segment');
