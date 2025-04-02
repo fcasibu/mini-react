@@ -1,9 +1,11 @@
 import { FrameworkOrchestrator } from './framework-orchestrator';
+import { Renderer } from './renderer';
 import { TemplateProcessor } from './template-processor';
-import type { MountedComponentInstance, ProcessedTemplate } from './types';
+import type { ComponentDefinition, MountedComponentInstance } from './types';
 
 const frameworkOrchestrator = FrameworkOrchestrator.getInstance();
 const processor = new TemplateProcessor();
+const renderer = new Renderer();
 
 export function html(
   staticStrings: TemplateStringsArray,
@@ -12,11 +14,15 @@ export function html(
   return processor.process(staticStrings, expressions);
 }
 
-export function render(shell: ProcessedTemplate, container: HTMLElement) {
-  const mountedInstance = frameworkOrchestrator.renderer.mount(
-    shell,
-    container,
-  );
+export function render(
+  definition: ComponentDefinition,
+  container: HTMLElement,
+) {
+  const { componentFunction, props } = definition;
+
+  const initialShell = componentFunction(props);
+
+  const mountedInstance = renderer.mount(initialShell, container);
 
   function addInstances(
     instance: MountedComponentInstance | MountedComponentInstance[],

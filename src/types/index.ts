@@ -42,6 +42,7 @@ export interface MountedComponentInstance {
   id: string;
   rootNodes: Node[];
   container: HTMLElement;
+  componentDefinition: ComponentDefinition | null;
   processedTemplate: ProcessedTemplate;
   dynamicNodeMap: Map<number, Node | Element>;
   eventListenerMap: Map<
@@ -53,3 +54,10 @@ export interface MountedComponentInstance {
     MountedComponentInstance | MountedComponentInstance[]
   >;
 }
+
+export interface ComponentDefinition<P = any> {
+  componentFunction: (props: P) => ProcessedTemplate;
+  props: P;
+}
+
+export type ComponentApi<P = any> = (props: P) => ComponentDefinition<P>;

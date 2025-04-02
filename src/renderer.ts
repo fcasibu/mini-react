@@ -1,5 +1,6 @@
 import type {
   AttributeMetadata,
+  ComponentDefinition,
   ContentMetadata,
   EventMetadata,
   MountedComponentInstance,
@@ -16,6 +17,7 @@ export class Renderer {
       id: crypto.randomUUID(),
       container,
       processedTemplate,
+      componentDefinition: null,
       rootNodes: [],
       dynamicNodeMap: new Map(),
       eventListenerMap: new Map(),
@@ -213,6 +215,15 @@ export class Renderer {
       if (childInstances.length > 0) {
         mountedInstance.childInstanceMap.set(part.index, childInstances);
       }
+    } else if (this.isComponentDefinition(value)) {
+      const { componentFunction, props } = value;
+      const initialShell = componentFunction(props);
+      const itemInstance = this.mount(initialShell, parent as HTMLElement);
+
+      mountedInstance.childInstanceMap.set(part.index, {
+        ...itemInstance,
+        componentDefinition: value,
+      });
     } else if (value !== null && value !== undefined) {
       const textNode = document.createTextNode(String(value));
       parent.replaceChild(textNode, comment);
@@ -230,6 +241,15 @@ export class Renderer {
       value !== null &&
       'staticHtml' in value &&
       'dynamicParts' in value
+    );
+  }
+
+  private isComponentDefinition(value: unknown): value is ComponentDefinition {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      'componentFunction' in value &&
+      'props' in value
     );
   }
 }

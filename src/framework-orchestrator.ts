@@ -1,11 +1,8 @@
-import { Renderer } from './renderer';
 import type { ComponentRenderContext, MountedComponentInstance } from './types';
 import { assert } from './utils/assert';
 
 // TODO(fcasibu): StateManager, EffectManager
 export class FrameworkOrchestrator {
-  public readonly renderer = new Renderer();
-
   private readonly componentRegistry = new Map<
     string,
     MountedComponentInstance
