@@ -1,10 +1,9 @@
 import type { FrameworkOrchestrator } from './framework-orchestrator';
-import type { MountedComponentInstance } from './types';
 import { assert } from './utils/assert';
 
 interface StateRecord<T = unknown> {
   value: T;
-  instance: MountedComponentInstance;
+  setState: (state: T | ((prev: T) => T)) => void;
 }
 
 export class StateManager {
@@ -30,37 +29,40 @@ export class StateManager {
         ? (initialValue as (prev: T) => T)(stateInstance.get(hookIndex)?.value)
         : initialValue;
 
-    const setState = (newValue: T | ((prev: T) => T)) => {
-      const mountedInstance =
-        this.frameworkOrchestrator.getMountedInstance(instanceId);
+    if (!stateInstance.has(hookIndex)) {
+      stateInstance.set(hookIndex, {
+        value: initialValue,
+        setState: (newValue: T | ((prev: T) => T)) => {
+          const mountedInstance =
+            this.frameworkOrchestrator.getMountedInstance(instanceId);
 
-      assert(mountedInstance, 'mounted instance should exist at this point');
+          assert(
+            mountedInstance,
+            'mounted instance should exist at this point',
+          );
 
-      if (!stateInstance.has(hookIndex)) {
-        stateInstance.set(hookIndex, {
-          value: initialValue,
-          instance: mountedInstance,
-        });
-      }
+          const stateRecord = stateInstance.get(hookIndex);
 
-      const stateRecord = stateInstance.get(hookIndex);
+          assert(stateRecord, 'state record should exist at this point');
+          const currentState = stateRecord.value;
 
-      assert(stateRecord, 'state record should exist at this point');
-      const currentState = stateRecord.value;
+          const newState =
+            typeof newValue === 'function'
+              ? (newValue as (prev: T) => T)(currentState)
+              : newValue;
 
-      const newState =
-        typeof newValue === 'function'
-          ? (newValue as (prev: T) => T)(currentState)
-          : newValue;
+          if (!Object.is(newState, currentState)) {
+            stateRecord.value = newState;
 
-      stateRecord.value = newState;
-
-      mountedInstance.renderer.triggerComponentRerender(mountedInstance);
-    };
+            mountedInstance.renderer.triggerComponentRerender(mountedInstance);
+          }
+        },
+      });
+    }
 
     const stateRecord = stateInstance.get(hookIndex);
 
-    return [(stateRecord?.value ?? value) as T, setState];
+    return [(stateRecord?.value ?? value) as T, stateRecord?.setState!];
   }
 
   public cleanUpStateForInstance(instanceId: string) {
