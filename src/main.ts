@@ -153,7 +153,6 @@ const Comment = component<{
   return html`<li onclick="${handleRemoveComents}">${text}</li>`;
 });
 
-// TODO(fcasibu): value is not updating after setting it to empty
 const Article = component<{ title: string; content: string }>(
   ({ title, content }) => {
     const [likes, setLikes] = $state(0);
@@ -191,7 +190,7 @@ const Article = component<{ title: string; content: string }>(
             onclick="${() => {
               if (newComment.trim() !== '') {
                 setComments([...comments, newComment]);
-                setNewComment('hahaha');
+                setNewComment('');
               }
             }}"
           >

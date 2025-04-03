@@ -319,6 +319,9 @@ export class Renderer {
     if (typeof newPart.value === 'boolean') {
       if (newPart.value) {
         targetEl.setAttribute(newPart.attributeName, '');
+        // setAttribute doesn't change the internal value somehow?
+        // @ts-expect-error - ensured it will only change props
+        targetEl[newPart.attributeName] = '';
       } else {
         targetEl.removeAttribute(newPart.attributeName);
       }
@@ -329,6 +332,9 @@ export class Renderer {
 
       if (currentAttrValue !== newValue) {
         targetEl.setAttribute(newPart.attributeName, newValue);
+        // setAttribute doesn't change the internal value somehow?
+        // @ts-expect-error - ensured it will only change props
+        targetEl[newPart.attributeName] = newValue;
       }
     }
   }
@@ -746,6 +752,9 @@ export class Renderer {
     if (typeof value === 'boolean') {
       if (value) {
         element.setAttribute(attributeName, '');
+        // setAttribute doesn't change the internal value somehow?
+        // @ts-expect-error - ensured it will only change props
+        element[attributeName] = '';
       } else {
         element.removeAttribute(attributeName);
       }
@@ -753,6 +762,9 @@ export class Renderer {
       element.removeAttribute(attributeName);
     } else {
       element.setAttribute(attributeName, String(value));
+      // setAttribute doesn't change the internal value somehow?
+      // @ts-expect-error - ensured it will only change props
+      element[attributeName] = String(value);
     }
 
     if (placeholderAttribute.name !== attributeName) {
