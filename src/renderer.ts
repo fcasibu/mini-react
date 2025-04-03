@@ -1,3 +1,4 @@
+import type { EffectManager } from './effect-manager';
 import { FrameworkOrchestrator } from './framework-orchestrator';
 import { StateManager } from './state-manager';
 import type {
@@ -14,6 +15,7 @@ export class Renderer {
   constructor(
     private readonly frameworkOrchestrator: FrameworkOrchestrator,
     private readonly stateManager: StateManager,
+    private readonly effectManager: EffectManager,
   ) {}
 
   public mount(
@@ -37,6 +39,7 @@ export class Renderer {
     );
 
     this.frameworkOrchestrator.addMountedInstance(mountedInstance);
+    this.effectManager.runEffects(mountedInstance.id);
 
     return mountedInstance;
   }
@@ -150,6 +153,7 @@ export class Renderer {
       targetInstance.rootNodes = [];
 
       this.stateManager.cleanUpStateForInstance(targetInstance.id);
+      this.effectManager.cleanUpEffectsForInstance(targetInstance.id);
       this.frameworkOrchestrator.removeMountedInstance(targetInstance.id);
 
       targetInstance.dynamicNodeMap.clear();
@@ -209,6 +213,7 @@ export class Renderer {
       }
     }
 
+    this.effectManager.runEffects(mountedInstance.id);
     mountedInstance.processedTemplate = newProcessedTemplate;
   }
 

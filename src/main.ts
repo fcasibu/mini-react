@@ -1,4 +1,5 @@
 import { component } from './create-component';
+import { EffectManager } from './effect-manager';
 import { FrameworkOrchestrator } from './framework-orchestrator';
 import { Renderer } from './renderer';
 import { StateManager } from './state-manager';
@@ -8,9 +9,12 @@ import type { ComponentDefinition, MountedComponentInstance } from './types';
 const frameworkOrchestrator = FrameworkOrchestrator.getInstance();
 const processor = new TemplateProcessor();
 const stateManager = new StateManager(frameworkOrchestrator);
-const renderer = new Renderer(frameworkOrchestrator, stateManager);
-
-// TODO(fcasibu): $effect
+const effectManager = new EffectManager();
+const renderer = new Renderer(
+  frameworkOrchestrator,
+  stateManager,
+  effectManager,
+);
 
 export { component };
 
@@ -56,12 +60,38 @@ export function $state<T>(newValue?: T | ((prev: T) => T)) {
   );
 }
 
+export function $effect(callback: () => (() => void) | void, deps?: unknown[]) {
+  const currentComponentContext =
+    frameworkOrchestrator.getCurrentComponentContext();
+
+  const hookIndex = frameworkOrchestrator.getNextHookIndex();
+
+  return effectManager.registerEffect(
+    currentComponentContext.instanceId,
+    hookIndex,
+    callback,
+    deps,
+  );
+}
+
 const Logo = component(() => {
   return html`<div>Logo</div>`;
 });
 
 const Navigation = component(() => {
   const [active, setActive] = $state('home');
+
+  $effect(() => {
+    console.log('hello, world!');
+  }, [active]);
+
+  $effect(() => {
+    console.log('no deps');
+  });
+
+  $effect(() => {
+    console.log('once');
+  }, []);
 
   return html`
     <nav>
