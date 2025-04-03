@@ -57,6 +57,7 @@ export class Renderer {
       dynamicNodeMap: new Map(),
       eventListenerMap: new Map(),
       childInstanceMap: new Map(),
+      listAnchorMap: new Map(),
       renderer: this,
     };
 
@@ -64,23 +65,11 @@ export class Renderer {
     templateElement.innerHTML = processedTemplate.staticHtml;
     const fragment = templateElement.content;
 
-    const nodesToProcess = this.collectNodesToProcess(fragment);
-
-    for (const node of nodesToProcess) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        this.processElement(
-          node as Element,
-          mountedInstance,
-          processedTemplate.dynamicParts,
-        );
-      } else if (node.nodeType === Node.COMMENT_NODE) {
-        this.processComment(
-          node as Comment,
-          mountedInstance,
-          processedTemplate.dynamicParts,
-        );
-      }
-    }
+    this.processFragmentNodes(
+      fragment,
+      mountedInstance,
+      processedTemplate.dynamicParts,
+    );
 
     mountedInstance.rootNodes = Array.from(fragment.childNodes);
 
@@ -95,7 +84,11 @@ export class Renderer {
     }
 
     if (placeholderNode) {
-      parentNode.replaceChild(fragment, placeholderNode);
+      if (placeholderNode.parentNode === parentNode) {
+        parentNode.replaceChild(fragment, placeholderNode);
+      } else {
+        parentNode.appendChild(fragment);
+      }
     } else {
       parentNode.appendChild(fragment);
     }
@@ -103,91 +96,116 @@ export class Renderer {
     return mountedInstance;
   }
 
-  private unmount(
-    targetInstance: MountedComponentInstance | MountedComponentInstance[],
+  private processFragmentNodes(
+    fragment: DocumentFragment,
+    mountedInstance: MountedComponentInstance,
+    dynamicParts: ComponentMetadata[],
   ): void {
-    if (Array.isArray(targetInstance)) {
-      targetInstance.forEach((instanceToUnmount) =>
-        this.unmount(instanceToUnmount),
-      );
-      return;
+    const nodesToProcess = this.collectNodesToProcess(fragment);
+
+    for (const node of nodesToProcess) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        this.processElement(node as Element, mountedInstance, dynamicParts);
+      } else if (
+        node.nodeType === Node.COMMENT_NODE &&
+        node.textContent?.startsWith('placeholder-')
+      ) {
+        this.processComment(node as Comment, mountedInstance, dynamicParts);
+      }
     }
+  }
 
-    targetInstance.childInstanceMap.forEach((childInstance) =>
-      this.unmount(childInstance),
-    );
-    targetInstance.childInstanceMap.clear();
+  private unmount(
+    targetInstanceOrInstances:
+      | MountedComponentInstance
+      | MountedComponentInstance[],
+  ): void {
+    const instances = Array.isArray(targetInstanceOrInstances)
+      ? targetInstanceOrInstances
+      : [targetInstanceOrInstances];
 
-    targetInstance.eventListenerMap.forEach(
-      ({ element, eventName, handler }) => {
-        element.removeEventListener(eventName, handler);
-      },
-    );
-    targetInstance.eventListenerMap.clear();
+    for (const targetInstance of instances) {
+      targetInstance.childInstanceMap.forEach((childInstance) =>
+        this.unmount(childInstance),
+      );
+      targetInstance.childInstanceMap.clear();
 
-    targetInstance.rootNodes.forEach((node) =>
-      node.parentNode?.removeChild(node),
-    );
-    targetInstance.rootNodes = [];
+      targetInstance.listAnchorMap.forEach(({ childInstances }) => {
+        this.unmount(childInstances);
+      });
+      targetInstance.listAnchorMap.clear();
 
-    this.stateManager.cleanUpStateForInstance(targetInstance.id);
-    this.frameworkOrchestrator.removeMountedInstance(targetInstance.id);
+      targetInstance.eventListenerMap.forEach(
+        ({ element, eventName, handler }) => {
+          element.removeEventListener(eventName.slice(2), handler);
+        },
+      );
+      targetInstance.eventListenerMap.clear();
 
-    targetInstance.dynamicNodeMap.clear();
+      targetInstance.rootNodes.forEach((node) => {
+        if (node.parentNode) {
+          node.parentNode.removeChild(node);
+        }
+      });
+      targetInstance.rootNodes = [];
+
+      this.stateManager.cleanUpStateForInstance(targetInstance.id);
+      this.frameworkOrchestrator.removeMountedInstance(targetInstance.id);
+
+      targetInstance.dynamicNodeMap.clear();
+    }
   }
 
   public update(
     mountedInstance: MountedComponentInstance,
     newProcessedTemplate: ProcessedTemplate,
   ): void {
-    const newDynamicParts = newProcessedTemplate.dynamicParts;
-    const newIndices = new Set(newDynamicParts.map((part) => part.index));
+    if (!this.isProcessedTemplate(newProcessedTemplate)) {
+      return;
+    }
 
-    for (const newPart of newDynamicParts) {
-      const index = newPart.index;
+    const oldDynamicParts = mountedInstance.processedTemplate.dynamicParts;
+    const newDynamicParts = newProcessedTemplate.dynamicParts;
+
+    const oldPartsMap = new Map(oldDynamicParts.map((p) => [p.index, p]));
+    const newPartsMap = new Map(newDynamicParts.map((p) => [p.index, p]));
+
+    const allIndices = new Set([...oldPartsMap.keys(), ...newPartsMap.keys()]);
+
+    for (const index of allIndices) {
+      const oldPart = oldPartsMap.get(index);
+      const newPart = newPartsMap.get(index);
+
       const oldNode = mountedInstance.dynamicNodeMap.get(index);
       const oldListener = mountedInstance.eventListenerMap.get(index);
       const oldChild = mountedInstance.childInstanceMap.get(index);
+      const oldListAnchors = mountedInstance.listAnchorMap.get(index);
 
-      switch (newPart.type) {
-        case 'event': {
-          this.updateEvent(
-            index,
-            newPart,
-            oldNode,
-            oldListener,
-            mountedInstance,
-          );
-          break;
+      if (newPart && oldPart) {
+        if (newPart.type !== oldPart.type) {
+          this.cleanupStalePart(index, mountedInstance, oldPart.type);
+        } else {
+          switch (newPart.type) {
+            case 'event':
+              this.updateEvent(index, newPart, oldListener, mountedInstance);
+              break;
+            case 'attribute':
+              this.updateAttribute(newPart, oldNode as Element);
+              break;
+            case 'content':
+              this.updateContent(
+                index,
+                newPart,
+                oldNode,
+                oldChild,
+                oldListAnchors,
+                mountedInstance,
+              );
+              break;
+          }
         }
-
-        case 'attribute': {
-          this.updateAttribute(newPart, oldNode);
-          break;
-        }
-
-        case 'content': {
-          this.updateContent(
-            index,
-            newPart,
-            oldNode,
-            oldChild,
-            mountedInstance,
-          );
-          break;
-        }
-      }
-    }
-
-    const oldIndices = new Set([
-      ...mountedInstance.dynamicNodeMap.keys(),
-      ...mountedInstance.eventListenerMap.keys(),
-      ...mountedInstance.childInstanceMap.keys(),
-    ]);
-
-    for (const oldIndex of oldIndices) {
-      if (!newIndices.has(oldIndex)) {
-        this.cleanupStalePart(oldIndex, mountedInstance);
+      } else if (oldPart) {
+        this.cleanupStalePart(index, mountedInstance, oldPart.type);
       }
     }
 
@@ -195,13 +213,27 @@ export class Renderer {
   }
 
   public triggerComponentRerender(mountedInstance: MountedComponentInstance) {
+    if (!mountedInstance || !mountedInstance.componentDefinition) {
+      return;
+    }
+
     this.frameworkOrchestrator.startComponentRender(mountedInstance.id);
 
-    const { componentFunction, props } =
-      mountedInstance.componentDefinition ?? {};
-    const newProcessedTemplate = componentFunction?.(props);
+    const { componentFunction, props } = mountedInstance.componentDefinition;
+    let newProcessedTemplate: ProcessedTemplate | undefined = undefined;
 
-    this.frameworkOrchestrator.finishComponentRender();
+    try {
+      const result = componentFunction(props);
+      if (!this.isProcessedTemplate(result)) {
+        throw new Error(
+          `Component function for instance ${mountedInstance.id} did not return a valid ProcessedTemplate during rerender.`,
+        );
+      }
+      newProcessedTemplate = result;
+    } catch (error) {
+    } finally {
+      this.frameworkOrchestrator.finishComponentRender();
+    }
 
     if (newProcessedTemplate) {
       this.update(mountedInstance, newProcessedTemplate);
@@ -211,37 +243,46 @@ export class Renderer {
   private updateEvent(
     index: number,
     newPart: EventMetadata,
-    oldNode: Node | Element | undefined,
     oldListener:
       | { element: Element; eventName: string; handler: EventListener }
       | undefined,
     mountedInstance: MountedComponentInstance,
   ) {
-    if (!newPart.eventName || typeof newPart.value !== 'function') {
-      return;
-    }
-    const element = oldNode as Element;
-    const eventName = newPart.eventName.startsWith('on')
-      ? newPart.eventName.substring(2)
-      : newPart.eventName;
-    const newHandler = newPart.value as EventListener;
+    const element = mountedInstance.dynamicNodeMap.get(index) as Element;
 
-    if (!element || typeof element.addEventListener !== 'function') {
+    if (!newPart.eventName || typeof newPart.value !== 'function') {
+      if (oldListener) {
+        element.removeEventListener(
+          oldListener.eventName.slice(2),
+          oldListener.handler,
+        );
+        mountedInstance.eventListenerMap.delete(index);
+      }
       return;
     }
+
+    const eventName = newPart.eventName;
+    const newHandler = newPart.value as EventListener;
 
     if (oldListener) {
       if (
-        !Object.is(oldListener.handler, newHandler) ||
+        oldListener.handler !== newHandler ||
         oldListener.eventName !== eventName
       ) {
-        element.removeEventListener(oldListener.eventName, oldListener.handler);
-        element.addEventListener(eventName, newHandler);
-        oldListener.handler = newHandler;
-        oldListener.eventName = eventName;
+        element.removeEventListener(
+          oldListener.eventName.slice(2),
+          oldListener.handler,
+        );
+        element.addEventListener(eventName.slice(2), newHandler);
+
+        mountedInstance.eventListenerMap.set(index, {
+          element,
+          eventName,
+          handler: newHandler,
+        });
       }
     } else {
-      element.addEventListener(eventName, newHandler);
+      element.addEventListener(eventName.slice(2), newHandler);
       mountedInstance.eventListenerMap.set(index, {
         element,
         eventName,
@@ -250,23 +291,40 @@ export class Renderer {
     }
   }
 
-  private updateAttribute(
-    newPart: AttributeMetadata,
-    oldNode: Node | Element | undefined,
-  ) {
+  private updateAttribute(newPart: AttributeMetadata, element: Node) {
+    if (!element) {
+      return;
+    }
+
+    const targetEl = (
+      element.nodeType === Node.TEXT_NODE
+        ? (element.parentElement ?? element.parentNode)
+        : element
+    ) as HTMLElement;
+
     if (!newPart.attributeName) {
       return;
     }
-    const element = oldNode as Element;
-    if (!element || typeof element.setAttribute !== 'function') {
-      return;
-    }
 
-    const newValue = String(newPart.value ?? '');
-    const currentAttrValue = element.getAttribute(newPart.attributeName);
+    const newValue =
+      newPart.value === null || newPart.value === undefined
+        ? null
+        : String(newPart.value);
 
-    if (!Object.is(currentAttrValue, newValue)) {
-      element.setAttribute(newPart.attributeName, newValue);
+    if (typeof newPart.value === 'boolean') {
+      if (newPart.value) {
+        targetEl.setAttribute(newPart.attributeName, '');
+      } else {
+        targetEl.removeAttribute(newPart.attributeName);
+      }
+    } else if (newValue === null) {
+      targetEl.removeAttribute(newPart.attributeName);
+    } else {
+      const currentAttrValue = targetEl.getAttribute(newPart.attributeName);
+
+      if (currentAttrValue !== newValue) {
+        targetEl.setAttribute(newPart.attributeName, newValue);
+      }
     }
   }
 
@@ -275,126 +333,289 @@ export class Renderer {
     newPart: ContentMetadata,
     oldNode: Node | Element | undefined,
     oldChild: MountedComponentInstance | MountedComponentInstance[] | undefined,
+    oldListAnchors:
+      | {
+          startIndex: number;
+          endIndex: number;
+          startAnchor: Comment;
+          endAnchor: Comment;
+          childInstances: MountedComponentInstance[];
+        }
+      | undefined,
     mountedInstance: MountedComponentInstance,
   ) {
-    if (!oldNode || !oldNode.parentNode) {
-      return;
-    }
-    const parentElement = oldNode.parentNode;
-    const newIsPrimitive = !(
-      this.isComponentDefinition(newPart.value) ||
-      Array.isArray(newPart.value) ||
-      newPart.value instanceof Node
-    );
-    const oldIsText = oldNode.nodeType === Node.TEXT_NODE;
-    const oldIsComponentOrList = mountedInstance.childInstanceMap.has(index);
+    const newValue = newPart.value;
 
-    if (newIsPrimitive) {
-      const newTextValue = String(newPart.value ?? '');
-      if (oldIsText) {
-        if (!Object.is(oldNode.textContent, newTextValue)) {
-          oldNode.textContent = newTextValue;
-        }
+    if (Array.isArray(newValue)) {
+      if (oldListAnchors) {
+        this.clearBetweenAnchors(
+          oldListAnchors.startAnchor,
+          oldListAnchors.endAnchor,
+        );
+        this.unmount(oldListAnchors.childInstances);
+
+        const newChildInstances = this.renderAndInsertListItems(
+          newValue,
+          mountedInstance,
+          oldListAnchors.endAnchor,
+        );
+
+        mountedInstance.listAnchorMap.set(index, {
+          ...oldListAnchors,
+          childInstances: newChildInstances,
+        });
       } else {
-        if (oldIsComponentOrList) {
-          this.unmount(mountedInstance.childInstanceMap.get(index)!);
+        let parentElement = oldNode?.parentNode;
+        let insertionPoint = oldNode;
+
+        if (!parentElement || !insertionPoint || !insertionPoint.parentNode) {
+          return;
+        }
+
+        const startAnchor = document.createComment(`list-start-${index}`);
+        const endAnchor = document.createComment(`list-end-${index}`);
+
+        parentElement.insertBefore(startAnchor, insertionPoint);
+        parentElement.insertBefore(endAnchor, insertionPoint);
+
+        if (oldChild) {
+          this.unmount(oldChild);
           mountedInstance.childInstanceMap.delete(index);
         }
-        const newNode = document.createTextNode(newTextValue);
-        parentElement.replaceChild(newNode, oldNode);
-        mountedInstance.dynamicNodeMap.set(index, newNode);
+
+        if (oldNode !== startAnchor && oldNode !== endAnchor && !oldChild) {
+          parentElement.removeChild(oldNode as Element);
+        }
+
+        const newChildInstances = this.renderAndInsertListItems(
+          newValue,
+          mountedInstance,
+          endAnchor,
+        );
+
+        mountedInstance.listAnchorMap.set(index, {
+          startIndex: index,
+          endIndex: index,
+          startAnchor,
+          endAnchor,
+          childInstances: newChildInstances,
+        });
+        mountedInstance.dynamicNodeMap.set(index, startAnchor);
+        if (oldChild) mountedInstance.childInstanceMap.delete(index);
       }
-    } else if (this.isComponentDefinition(newPart.value)) {
-      const newDefinition = newPart.value as ComponentDefinition<any>;
-      if (oldIsComponentOrList && !Array.isArray(oldChild)) {
-        const oldChildInstance = oldChild as MountedComponentInstance;
-        const existingMountedInstance =
-          this.frameworkOrchestrator.getMountedInstance(oldChildInstance.id);
-        if (
-          existingMountedInstance &&
-          existingMountedInstance.componentDefinition?.componentFunction ===
-            newDefinition.componentFunction
-        ) {
-          if (
-            !Object.is(
-              existingMountedInstance.componentDefinition.props,
-              newDefinition.props,
-            )
-          ) {
-            existingMountedInstance.componentDefinition.props =
-              newDefinition.props;
-            this.triggerComponentRerender(existingMountedInstance);
-          }
+    } else {
+      if (oldListAnchors) {
+        this.clearBetweenAnchors(
+          oldListAnchors.startAnchor,
+          oldListAnchors.endAnchor,
+        );
+        this.unmount(oldListAnchors.childInstances);
+
+        const newNode = this.renderAndInsertSingleItem(
+          newValue,
+          mountedInstance,
+          oldListAnchors.endAnchor,
+        );
+
+        oldListAnchors.startAnchor.parentNode?.removeChild(
+          oldListAnchors.startAnchor,
+        );
+        oldListAnchors.endAnchor.parentNode?.removeChild(
+          oldListAnchors.endAnchor,
+        );
+
+        mountedInstance.listAnchorMap.delete(index);
+        if (newNode instanceof Node) {
+          mountedInstance.dynamicNodeMap.set(index, newNode);
+        }
+        if (this.isComponentDefinition(newValue) && newNode instanceof Node) {
         } else {
-          this.unmount(oldChildInstance);
-          const newChildInstance = this.mount(
-            newDefinition,
-            parentElement as HTMLElement,
-            oldNode,
-          );
-          mountedInstance.dynamicNodeMap.set(
-            index,
-            newChildInstance.rootNodes[0] || oldNode,
-          );
-          mountedInstance.childInstanceMap.set(index, newChildInstance);
+          mountedInstance.childInstanceMap.delete(index);
         }
       } else {
-        if (oldIsComponentOrList) {
-          this.unmount(oldChild as MountedComponentInstance[]);
+        let parentElement = oldNode?.parentNode;
+        if (!oldNode || !parentElement) {
+          return;
         }
-        const newChildInstance = this.mount(
-          newDefinition,
-          parentElement as HTMLElement,
+
+        if (oldChild && !this.isComponentDefinition(newValue)) {
+          this.unmount(oldChild);
+          mountedInstance.childInstanceMap.delete(index);
+        }
+
+        const newNode = this.renderAndInsertSingleItem(
+          newValue,
+          mountedInstance,
           oldNode,
         );
-        mountedInstance.dynamicNodeMap.set(
-          index,
-          newChildInstance.rootNodes[0] || oldNode,
-        );
-        mountedInstance.childInstanceMap.set(index, newChildInstance);
-      }
-    } else if (Array.isArray(newPart.value)) {
-      if (oldIsComponentOrList) {
-        this.unmount(mountedInstance.childInstanceMap.get(index)!);
-      }
-      mountedInstance.childInstanceMap.delete(index);
 
-      const listFragment = document.createDocumentFragment();
-      const newChildInstances: MountedComponentInstance[] = [];
-      for (const item of newPart.value) {
-        if (this.isComponentDefinition(item)) {
-          const childInstance = this.mount(item, document.createElement('div'));
-          childInstance.rootNodes.forEach((node) =>
-            listFragment.appendChild(node),
-          );
-          newChildInstances.push(childInstance);
-        } else if (item instanceof Node) {
-          listFragment.appendChild(item.cloneNode(true));
-        } else {
-          listFragment.appendChild(document.createTextNode(String(item ?? '')));
-        }
-      }
-      parentElement.replaceChild(listFragment, oldNode);
-      mountedInstance.dynamicNodeMap.set(index, oldNode);
-      if (newChildInstances.length > 0) {
-        mountedInstance.childInstanceMap.set(index, newChildInstances);
-      }
-    } else if (newPart.value instanceof Node) {
-      if (!Object.is(oldNode, newPart.value)) {
-        if (oldIsComponentOrList) {
-          this.unmount(mountedInstance.childInstanceMap.get(index)!);
+        if (newNode !== oldNode && newNode instanceof Node) {
+          mountedInstance.dynamicNodeMap.set(index, newNode);
+        } else if (
+          newNode === oldNode &&
+          !this.isComponentDefinition(newValue)
+        ) {
+          mountedInstance.dynamicNodeMap.set(index, oldNode);
           mountedInstance.childInstanceMap.delete(index);
         }
-        parentElement.replaceChild(newPart.value, oldNode);
-        mountedInstance.dynamicNodeMap.set(index, newPart.value);
       }
+    }
+  }
+
+  private renderAndInsertListItems(
+    items: any[],
+    parentInstance: MountedComponentInstance,
+    insertionPoint: Node,
+  ): MountedComponentInstance[] {
+    const childInstances: MountedComponentInstance[] = [];
+    const fragment = document.createDocumentFragment();
+
+    for (const item of items) {
+      if (this.isProcessedTemplate(item)) {
+        const templateElement = document.createElement('template');
+        templateElement.innerHTML = item.staticHtml;
+        const itemFragment = templateElement.content;
+
+        this.processFragmentNodes(
+          itemFragment,
+          parentInstance,
+          item.dynamicParts,
+        );
+
+        fragment.appendChild(itemFragment);
+      } else if (this.isComponentDefinition(item)) {
+        const tempContainer = document.createElement('div');
+        const childInstance = this.mount(item, tempContainer);
+        childInstance.rootNodes.forEach((node) => fragment.appendChild(node));
+        childInstances.push(childInstance);
+      } else if (item instanceof Node) {
+        fragment.appendChild(item.cloneNode(true));
+      } else {
+        fragment.appendChild(document.createTextNode(String(item ?? '')));
+      }
+    }
+
+    insertionPoint.parentNode?.insertBefore(fragment, insertionPoint);
+
+    return childInstances;
+  }
+
+  private renderAndInsertSingleItem(
+    value: any,
+    mountedInstance: MountedComponentInstance,
+    insertionPointOrOldNode: Node,
+  ): Node | null {
+    const parentElement = insertionPointOrOldNode.parentNode;
+    if (!parentElement) {
+      return null;
+    }
+    const index =
+      mountedInstance.processedTemplate.dynamicParts.find(
+        (p) => p.value === value,
+      )?.index ?? -1;
+
+    let newNode: Node | null = null;
+
+    if (this.isComponentDefinition(value)) {
+      const existingChild = mountedInstance.childInstanceMap.get(index);
+
+      if (
+        existingChild &&
+        !Array.isArray(existingChild) &&
+        existingChild.componentDefinition?.componentFunction ===
+          value.componentFunction
+      ) {
+        if (existingChild.componentDefinition) {
+          existingChild.componentDefinition.props = value.props;
+        }
+
+        newNode = existingChild.rootNodes[0] || insertionPointOrOldNode;
+      } else {
+        const oldChild = mountedInstance.childInstanceMap.get(index);
+        if (oldChild) {
+          this.unmount(oldChild);
+        }
+
+        const childInstance = this.mount(
+          value,
+          parentElement as HTMLElement,
+          insertionPointOrOldNode,
+        );
+        mountedInstance.childInstanceMap.set(index, childInstance);
+        newNode = childInstance.rootNodes[0] || null;
+      }
+    } else if (value instanceof Node) {
+      const oldChild = mountedInstance.childInstanceMap.get(index);
+      if (oldChild) {
+        this.unmount(oldChild);
+        mountedInstance.childInstanceMap.delete(index);
+      }
+
+      if (insertionPointOrOldNode !== value) {
+        parentElement.replaceChild(value, insertionPointOrOldNode);
+        newNode = value;
+      } else {
+        newNode = value;
+      }
+    } else {
+      const oldChild = mountedInstance.childInstanceMap.get(index);
+      if (oldChild) {
+        this.unmount(oldChild);
+        mountedInstance.childInstanceMap.delete(index);
+      }
+
+      const textValue = String(value ?? '');
+
+      if (insertionPointOrOldNode.nodeType === Node.TEXT_NODE) {
+        if (insertionPointOrOldNode.textContent !== textValue) {
+          insertionPointOrOldNode.textContent = textValue;
+        }
+        newNode = insertionPointOrOldNode;
+      } else {
+        newNode = document.createTextNode(textValue);
+        parentElement.replaceChild(newNode, insertionPointOrOldNode);
+      }
+    }
+
+    if (newNode && index !== -1) {
+      mountedInstance.dynamicNodeMap.set(index, newNode);
+      if (!this.isComponentDefinition(value)) {
+        mountedInstance.childInstanceMap.delete(index);
+      }
+    } else if (index !== -1 && !this.isComponentDefinition(value)) {
+      mountedInstance.childInstanceMap.delete(index);
+    }
+
+    return newNode;
+  }
+
+  private clearBetweenAnchors(startAnchor: Node, endAnchor: Node): void {
+    const parent = startAnchor.parentNode;
+    if (!parent) return;
+
+    let currentNode = startAnchor.nextSibling;
+    while (currentNode && currentNode !== endAnchor) {
+      const next = currentNode.nextSibling;
+      parent.removeChild(currentNode);
+      currentNode = next;
     }
   }
 
   private cleanupStalePart(
     index: number,
     mountedInstance: MountedComponentInstance,
+    partType: ComponentMetadata['type'],
   ): void {
+    const listAnchors = mountedInstance.listAnchorMap.get(index);
+    if (listAnchors) {
+      this.clearBetweenAnchors(listAnchors.startAnchor, listAnchors.endAnchor);
+      this.unmount(listAnchors.childInstances);
+
+      listAnchors.startAnchor.parentNode?.removeChild(listAnchors.startAnchor);
+      listAnchors.endAnchor.parentNode?.removeChild(listAnchors.endAnchor);
+      mountedInstance.listAnchorMap.delete(index);
+    }
+
     if (mountedInstance.childInstanceMap.has(index)) {
       this.unmount(mountedInstance.childInstanceMap.get(index)!);
       mountedInstance.childInstanceMap.delete(index);
@@ -402,44 +623,49 @@ export class Renderer {
 
     const listenerToRemove = mountedInstance.eventListenerMap.get(index);
     if (listenerToRemove) {
-      listenerToRemove.element.removeEventListener(
-        listenerToRemove.eventName,
-        listenerToRemove.handler,
-      );
+      if (listenerToRemove.element.parentNode) {
+        listenerToRemove.element.removeEventListener(
+          listenerToRemove.eventName.slice(2),
+          listenerToRemove.handler,
+        );
+      }
       mountedInstance.eventListenerMap.delete(index);
     }
 
     const nodeToRemoveRef = mountedInstance.dynamicNodeMap.get(index);
+
     if (
       nodeToRemoveRef &&
       nodeToRemoveRef.nodeType !== Node.ELEMENT_NODE &&
-      !this.isNodeInInstanceRoots(nodeToRemoveRef, mountedInstance)
+      nodeToRemoveRef.nodeType !== Node.COMMENT_NODE &&
+      nodeToRemoveRef.parentNode &&
+      partType === 'content' &&
+      !listAnchors
     ) {
-      nodeToRemoveRef.parentNode?.removeChild(nodeToRemoveRef);
+      nodeToRemoveRef.parentNode.removeChild(nodeToRemoveRef);
     }
+
     mountedInstance.dynamicNodeMap.delete(index);
   }
 
-  private isNodeInInstanceRoots(
-    node: Node,
-    mountedInstance: MountedComponentInstance,
-  ): boolean {
-    return mountedInstance.rootNodes.some(
-      (rootNode) => rootNode === node || rootNode.contains(node),
-    );
-  }
-
-  private collectNodesToProcess(fragment: DocumentFragment): Node[] {
+  private collectNodesToProcess(fragment: DocumentFragment | Element): Node[] {
     const walker = document.createTreeWalker(
       fragment,
       NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT,
       {
-        acceptNode: (node: Node) =>
-          (node.nodeType === Node.COMMENT_NODE &&
-            node.textContent?.startsWith('placeholder-')) ||
-          node.nodeType === Node.ELEMENT_NODE
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_REJECT,
+        acceptNode: (node: Node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            return NodeFilter.FILTER_ACCEPT;
+          }
+
+          if (
+            node.nodeType === Node.COMMENT_NODE &&
+            node.textContent?.startsWith('placeholder-')
+          ) {
+            return NodeFilter.FILTER_ACCEPT;
+          }
+          return NodeFilter.FILTER_REJECT;
+        },
       },
     );
 
@@ -457,10 +683,14 @@ export class Renderer {
     dynamicParts: ComponentMetadata[],
   ): void {
     const attributes = Array.from(element.attributes);
+    let elementProcessed = false;
+
     for (const attr of attributes) {
       if (!attr.value.startsWith('placeholder-')) continue;
 
       const index = parseInt(attr.value.substring('placeholder-'.length), 10);
+      if (isNaN(index)) continue;
+
       const dynamicPart = dynamicParts.find((part) => part.index === index);
 
       if (!dynamicPart) {
@@ -468,61 +698,89 @@ export class Renderer {
         continue;
       }
 
-      mountedInstance.dynamicNodeMap.set(dynamicPart.index, element);
+      if (!elementProcessed) {
+        mountedInstance.dynamicNodeMap.set(index, element);
+        elementProcessed = true;
+      }
 
       switch (dynamicPart.type) {
-        case 'attribute': {
+        case 'attribute':
           this.applyAttributePart(
             element,
             attr,
             dynamicPart as AttributeMetadata,
+            mountedInstance,
+            index,
           );
           break;
-        }
-        case 'event': {
+        case 'event':
           this.applyEventPart(
             element,
             attr,
             dynamicPart as EventMetadata,
             mountedInstance,
+            index,
           );
           break;
-        }
-        default: {
+        default:
           element.removeAttribute(attr.name);
-        }
       }
     }
   }
 
   private applyAttributePart(
     element: Element,
-    attribute: Attr,
+    placeholderAttribute: Attr,
     part: AttributeMetadata,
+    mountedInstance: MountedComponentInstance,
+    index: number,
   ): void {
-    element.setAttribute(part.attributeName, String(part.value ?? ''));
-    if (attribute.name !== part.attributeName) {
-      element.removeAttribute(attribute.name);
+    const attributeName = part.attributeName;
+    const value = part.value;
+
+    if (typeof value === 'boolean') {
+      if (value) {
+        element.setAttribute(attributeName, '');
+      } else {
+        element.removeAttribute(attributeName);
+      }
+    } else if (value === null || value === undefined) {
+      element.removeAttribute(attributeName);
+    } else {
+      element.setAttribute(attributeName, String(value));
     }
+
+    if (placeholderAttribute.name !== attributeName) {
+      element.removeAttribute(placeholderAttribute.name);
+    }
+
+    mountedInstance.dynamicNodeMap.set(index, element);
   }
 
   private applyEventPart(
     element: Element,
-    attribute: Attr,
+    placeholderAttribute: Attr,
     part: EventMetadata,
     mountedInstance: MountedComponentInstance,
+    index: number,
   ): void {
-    const eventName = part.eventName.startsWith('on')
-      ? part.eventName.substring(2)
-      : part.eventName;
     const handler = part.value as EventListener;
-    element.addEventListener(eventName, handler);
-    element.removeAttribute(attribute.name);
-    mountedInstance.eventListenerMap.set(part.index, {
+
+    if (typeof handler !== 'function') {
+      element.removeAttribute(placeholderAttribute.name);
+      return;
+    }
+
+    element.addEventListener(part.eventName.slice(2), handler);
+    element.removeAttribute(placeholderAttribute.name);
+
+    mountedInstance.eventListenerMap.set(index, {
       element,
-      eventName,
+      eventName: part.eventName,
       handler,
     });
+
+    mountedInstance.dynamicNodeMap.set(index, element);
   }
 
   private processComment(
@@ -537,10 +795,15 @@ export class Renderer {
       placeholderText.substring('placeholder-'.length),
       10,
     );
+    if (isNaN(index)) {
+      commentNode.remove();
+      return;
+    }
 
     const dynamicPart = dynamicParts.find(
       (part) => part.index === index && part.type === 'content',
     ) as ContentMetadata | undefined;
+
     if (!dynamicPart) {
       commentNode.remove();
       return;
@@ -560,50 +823,57 @@ export class Renderer {
     }
 
     const value = part.value;
-    if (value instanceof Node) {
-      mountedInstance.dynamicNodeMap.set(part.index, value);
-      parentElement.replaceChild(value, commentNode);
-    } else if (this.isComponentDefinition(value)) {
-      const childInstance = this.mount(
+    const index = part.index;
+
+    if (Array.isArray(value)) {
+      const startAnchor = document.createComment(`list-start-${index}`);
+      const endAnchor = document.createComment(`list-end-${index}`);
+
+      parentElement.replaceChild(startAnchor, commentNode);
+
+      parentElement.insertBefore(endAnchor, startAnchor.nextSibling);
+
+      const childInstances = this.renderAndInsertListItems(
         value,
-        parentElement as HTMLElement,
+        mountedInstance,
+        endAnchor,
+      );
+
+      mountedInstance.listAnchorMap.set(index, {
+        startIndex: index,
+        endIndex: index,
+        startAnchor,
+        endAnchor,
+        childInstances,
+      });
+
+      mountedInstance.dynamicNodeMap.set(index, startAnchor);
+    } else {
+      const newNode = this.renderAndInsertSingleItem(
+        value,
+        mountedInstance,
         commentNode,
       );
-      mountedInstance.childInstanceMap.set(part.index, childInstance);
-      mountedInstance.dynamicNodeMap.set(
-        part.index,
-        childInstance.rootNodes[0] || commentNode,
-      );
-    } else if (Array.isArray(value)) {
-      const listFragment = document.createDocumentFragment();
-      const childInstances: MountedComponentInstance[] = [];
-      for (const item of value) {
-        if (this.isComponentDefinition(item)) {
-          const childInstance = this.mount(item, document.createElement('div'));
-          childInstance.rootNodes.forEach((node) =>
-            listFragment.appendChild(node),
-          );
-          childInstances.push(childInstance);
-        } else if (item instanceof Node) {
-          listFragment.appendChild(item.cloneNode(true));
-        } else {
-          listFragment.appendChild(document.createTextNode(String(item ?? '')));
-        }
+
+      if (newNode) {
+        mountedInstance.dynamicNodeMap.set(index, newNode);
+      } else {
+        const emptyText = document.createTextNode('');
+        parentElement.replaceChild(emptyText, commentNode);
+        mountedInstance.dynamicNodeMap.set(index, emptyText);
+        mountedInstance.childInstanceMap.delete(index);
       }
-      parentElement.replaceChild(listFragment, commentNode);
-      if (childInstances.length > 0) {
-        mountedInstance.childInstanceMap.set(part.index, childInstances);
-      }
-      mountedInstance.dynamicNodeMap.set(part.index, commentNode);
-    } else if (value !== null && value !== undefined) {
-      const textNode = document.createTextNode(String(value));
-      parentElement.replaceChild(textNode, commentNode);
-      mountedInstance.dynamicNodeMap.set(part.index, textNode);
-    } else {
-      const emptyTextNode = document.createTextNode('');
-      parentElement.replaceChild(emptyTextNode, commentNode);
-      mountedInstance.dynamicNodeMap.set(part.index, emptyTextNode);
     }
+  }
+
+  private isProcessedTemplate(value: unknown): value is ProcessedTemplate {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      'staticHtml' in value &&
+      typeof (value as any).staticHtml === 'string' &&
+      'dynamicParts' in value
+    );
   }
 
   private isComponentDefinition(value: unknown): value is ComponentDefinition {

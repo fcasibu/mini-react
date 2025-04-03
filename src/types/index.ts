@@ -42,6 +42,16 @@ export interface ProcessedTemplate {
 
 export interface MountedComponentInstance {
   id: string;
+  listAnchorMap: Map<
+    number,
+    {
+      startIndex: number;
+      endIndex: number;
+      startAnchor: Comment;
+      endAnchor: Comment;
+      childInstances: MountedComponentInstance[];
+    }
+  >;
   rootNodes: Node[];
   container: HTMLElement | null;
   renderer: Renderer;
